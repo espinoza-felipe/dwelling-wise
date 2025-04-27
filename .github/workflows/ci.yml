@@ -1,61 +1,112 @@
-# .github/workflows/ci.yml
-
 name: CI
-# —————————————————————— 
-# Nombre de la *workflow*. Aparecerá como “CI” en la pestaña de Actions.
 
 on:
   push:
     branches: [ develop, main ]
   pull_request:
     branches: [ develop ]
-# ——————————————————————
-# Define los *eventos* que disparan este workflow:
-# - Cada vez que haces `push` a las ramas “develop” o “main”.
-# - Cada vez que se abre o actualiza un *Pull Request* hacia “develop”.
 
 jobs:
-  build-and-test:
+  check-db:
+    name: Validar Base de Datos
     runs-on: ubuntu-latest
-    # ——————————————————————
-    # job “build-and-test”:
-    # • Se ejecuta en un runner de GitHub con Ubuntu.
-    # • Levanta un contenedor de Postgres como servicio,
-    #   simulando la base de datos para que tus tests la usen.
-    # • `options` establece un chequeo de salud para esperar a que Postgres esté listo.
-
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: dw_user
+          POSTGRES_PASSWORD: dw_pass
+          POSTGRES_DB: dwellingwise
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U dw_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
-      # Baja el código de tu repo al runner.
       - name: Checkout
         uses: actions/checkout@v3
-      # ——————————————————————
-      # Mantiene en caché ~/.cache/pip entre ejecuciones,
-      # acelerando futuras instalaciones si no cambias requirements.txt.
-      - name: Cache pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
 
-      # Instala Python 3.10 en el runner.
+      - name: Esperar a Postgres
+        run: sleep 10  # o puedes añadir un loop *pg_isready*
+
+      - name: Probar conexión con psql
+        run: |
+          docker run --rm --network host postgres:15 \
+            psql postgresql://dw_user:dw_pass@localhost:5432/dwellingwise -c "SELECT 1;"
+  
+  backend:
+    name: Validar Backend
+    runs-on: ubuntu-latest
+    needs: check-db
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: dw_user
+          POSTGRES_PASSWORD: dw_pass
+          POSTGRES_DB: dwellingwise
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U dw_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
-        with:
+        with: 
           python-version: '3.10'
-      # ——————————————————————
-      # Actualiza pip e instala todas las dependencias listadas
-      # en backend/requirements.txt.
 
-      - name: Install dependencies
+      - name: Instalar dependencias
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -r backend/requirements.txt
-      #    pip install -r services/auth/requirements.txt
-      #    pip install -r services/home/requirements.txt
-          # … repetir para cada microservicio
-      # ——————————————————————
-     
 
- 
+      - name: Arrancar FastAPI en background
+        run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 5
+
+      - name: Chequeo Health Endpoint
+        run: |
+          curl --fail http://localhost:8000/health
+
+      - name: Probar Conexión ORM
+        run: |
+          python - <<EOF
+          from sqlalchemy import create_engine
+          engine = create_engine("postgresql://dw_user:dw_pass@localhost:5432/dwellingwise")
+          print(engine.execute("SELECT 1;").fetchone())
+          EOF
+
+  frontend:
+    name: Validar Frontend
+    runs-on: ubuntu-latest
+    needs: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with: 
+          node-version: '18'
+
+      - name: Instalar dependencias
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Construir la app
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Server-side build smoke test
+        run: |
+          npx serve -s frontend/build -l 5000 & sleep 5
+          curl --fail http://localhost:5000
