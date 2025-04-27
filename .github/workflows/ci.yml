@@ -1,0 +1,104 @@
+# .github/workflows/ci.yml
+
+name: CI
+# —————————————————————— 
+# Nombre de la *workflow*. Aparecerá como “CI” en la pestaña de Actions.
+
+on:
+  push:
+    branches: [ develop, main ]
+  pull_request:
+    branches: [ develop ]
+# ——————————————————————
+# Define los *eventos* que disparan este workflow:
+# - Cada vez que haces `push` a las ramas “develop” o “main”.
+# - Cada vez que se abre o actualiza un *Pull Request* hacia “develop”.
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: dw_user
+          POSTGRES_PASSWORD: dw_pass
+          POSTGRES_DB: dwellingwise
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U dw_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    # ——————————————————————
+    # job “build-and-test”:
+    # • Se ejecuta en un runner de GitHub con Ubuntu.
+    # • Levanta un contenedor de Postgres como servicio,
+    #   simulando la base de datos para que tus tests la usen.
+    # • `options` establece un chequeo de salud para esperar a que Postgres esté listo.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      # ——————————————————————
+      # Paso 1: baja tu código al runner para trabajar con él.
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      # ——————————————————————
+      # Paso 2: instala Python 3.10 en el runner.
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/auth/requirements.txt
+          pip install -r services/home/requirements.txt
+          # … repetir para cada microservicio
+      # ——————————————————————
+      # Paso 3: actualiza pip y luego instala las dependencias
+      # de cada servicio (auth, home, inventory, etc.).
+
+      - name: Run Tests
+        run: |
+          pytest services/auth/tests
+          pytest services/home/tests
+          # …
+      # ——————————————————————
+      # Paso 4: ejecuta tus suites de pruebas con pytest
+      # para cada servicio. Si algún test falla, el job marca error.
+
+  build-and-push-docker:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # ——————————————————————
+    # Segundo job “build-and-push-docker”:
+    # • Se dispara sólo si “build-and-test” terminó OK (`needs:`).
+    # • Y sólo cuando la rama actual es exactamente “main”.
+    # • También corre en Ubuntu.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      # ——————————————————————
+      # Vuelve a obtener el código para la fase de construcción.
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # ——————————————————————
+      # Autentica contra Docker Hub usando tus *Secrets* de GitHub
+      # (variables seguras que almacenas en Settings → Secrets).
+
+      - name: Build & push images
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USER }}/dwellingwise-auth:latest services/auth
+          docker push ${{ secrets.DOCKERHUB_USER }}/dwellingwise-auth:latest
+          # … repetir para cada microservicio
+      # ——————————————————————
+      # Construye cada imagen Docker (auth, home, inventory…)
+      # y súbelas a tu repositorio de Docker Hub con la etiqueta `latest`.
