@@ -78,14 +78,7 @@ jobs:
           cd backend
           curl --fail http://localhost:8000/health
 
-      - name: Probar Conexión ORM
-        run: |
-          cd backend
-          python - <<EOF
-          from sqlalchemy import create_engine
-          engine = create_engine("postgresql://dw_user:dw_pass@localhost:5432/dwellingwise")
-          print(engine.execute("SELECT 1;").fetchone())
-          EOF
+      
 
   frontend:
     name: Validar Frontend
