@@ -65,7 +65,7 @@ jobs:
         run: |
           cd backend
           pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r requirements.txt
 
       - name: Arrancar FastAPI en background
         run: |
